@@ -4,10 +4,11 @@ from sqlalchemy.orm import Session
 import httpx
 from datetime import datetime
 from typing import Optional
-from database import get_db, Profile
+from database import get_db, Profile   # Absolute import
 
 app = FastAPI(title="Profile Intelligence Service")
 
+# ====================== CORS (This was missing / broken) ======================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -32,12 +33,19 @@ def get_age_group(age: Optional[int]) -> Optional[str]:
 @app.post("/api/profiles", status_code=201)
 async def create_profile(payload: dict, db: Session = Depends(get_db)):
     name = payload.get("name")
-    if not name or not isinstance(name, str) or len(name.strip()) == 0:
+
+    # === Improved Input Validation ===
+    if name is None:
         raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing or empty name"})
+    
+    if not isinstance(name, str):
+        raise HTTPException(status_code=422, detail={"status": "error", "message": "Name must be a string"})
 
     name = name.strip().lower()
+    if len(name) == 0:
+        raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing or empty name"})
 
-    # Idempotency check
+    # Idempotency
     existing = db.query(Profile).filter(Profile.name == name).first()
     if existing:
         return {
