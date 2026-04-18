@@ -3,9 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import httpx
 from datetime import datetime
-from typing import List, Optional
-from .database import get_db, Profile, generate_uuid_v7
-from .schemas import ProfileResponse, ProfileListResponse
+from typing import Optional
+from database import get_db, Profile
 
 app = FastAPI(title="Profile Intelligence Service")
 
@@ -29,6 +28,7 @@ def get_age_group(age: Optional[int]) -> Optional[str]:
     else:
         return "senior"
 
+
 @app.post("/api/profiles", status_code=201)
 async def create_profile(payload: dict, db: Session = Depends(get_db)):
     name = payload.get("name")
@@ -37,7 +37,7 @@ async def create_profile(payload: dict, db: Session = Depends(get_db)):
 
     name = name.strip().lower()
 
-    # Idempotency: check if profile already exists
+    # Idempotency check
     existing = db.query(Profile).filter(Profile.name == name).first()
     if existing:
         return {
@@ -48,40 +48,30 @@ async def create_profile(payload: dict, db: Session = Depends(get_db)):
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            # Call all 3 APIs in parallel
-            genderize_task = client.get("https://api.genderize.io/", params={"name": name})
-            agify_task = client.get("https://api.agify.io/", params={"name": name})
-            nationalize_task = client.get("https://api.nationalize.io/", params={"name": name})
+            genderize = await client.get("https://api.genderize.io/", params={"name": name})
+            agify = await client.get("https://api.agify.io/", params={"name": name})
+            nationalize = await client.get("https://api.nationalize.io/", params={"name": name})
 
-            genderize, agify, nationalize = await asyncio.gather(
-                genderize_task, agify_task, nationalize_task, return_exceptions=True
-            )
-
-        # Validate responses
-        if isinstance(genderize, Exception) or genderize.status_code != 200 or not genderize.json().get("gender"):
+        if genderize.status_code != 200 or not genderize.json().get("gender"):
             raise HTTPException(status_code=502, detail={"status": "error", "message": "Genderize returned an invalid response"})
-
-        if isinstance(agify, Exception) or agify.status_code != 200 or agify.json().get("age") is None:
+        if agify.status_code != 200 or agify.json().get("age") is None:
             raise HTTPException(status_code=502, detail={"status": "error", "message": "Agify returned an invalid response"})
-
-        if isinstance(nationalize, Exception) or nationalize.status_code != 200 or not nationalize.json().get("country"):
+        if nationalize.status_code != 200 or not nationalize.json().get("country"):
             raise HTTPException(status_code=502, detail={"status": "error", "message": "Nationalize returned an invalid response"})
 
-        g_data = genderize.json()
-        a_data = agify.json()
-        n_data = nationalize.json()
+        g = genderize.json()
+        a = agify.json()
+        n = nationalize.json()
 
-        # Get country with highest probability
-        countries = n_data.get("country", [])
-        best_country = max(countries, key=lambda x: x.get("probability", 0)) if countries else None
+        best_country = max(n.get("country", []), key=lambda x: x.get("probability", 0)) if n.get("country") else None
 
         profile = Profile(
             name=name,
-            gender=g_data.get("gender"),
-            gender_probability=round(g_data.get("probability", 0), 4),
-            sample_size=g_data.get("count", 0),
-            age=a_data.get("age"),
-            age_group=get_age_group(a_data.get("age")),
+            gender=g.get("gender"),
+            gender_probability=round(g.get("probability", 0), 4),
+            sample_size=g.get("count", 0),
+            age=a.get("age"),
+            age_group=get_age_group(a.get("age")),
             country_id=best_country.get("country_id") if best_country else None,
             country_probability=round(best_country.get("probability", 0), 4) if best_country else None,
         )
@@ -90,14 +80,11 @@ async def create_profile(payload: dict, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(profile)
 
-        return {
-            "status": "success",
-            "data": profile
-        }
+        return {"status": "success", "data": profile}
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=500, detail={"status": "error", "message": "Internal server error"})
 
 
@@ -117,7 +104,6 @@ def list_profiles(
     db: Session = Depends(get_db)
 ):
     query = db.query(Profile)
-
     if gender:
         query = query.filter(Profile.gender == gender.lower())
     if country_id:
