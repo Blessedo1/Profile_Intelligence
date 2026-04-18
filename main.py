@@ -8,7 +8,7 @@ from database import get_db, Profile   # Absolute import
 
 app = FastAPI(title="Profile Intelligence Service")
 
-# ====================== CORS (This was missing / broken) ======================
+# ====================== CORS ======================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -34,7 +34,7 @@ def get_age_group(age: Optional[int]) -> Optional[str]:
 async def create_profile(payload: dict, db: Session = Depends(get_db)):
     name = payload.get("name")
 
-    # === Improved Input Validation ===
+    # === Input Validation ===
     if name is None:
         raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing or empty name"})
     
